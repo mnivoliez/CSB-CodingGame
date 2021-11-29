@@ -1,10 +1,36 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <cmath>
 #include <algorithm>
 
 using namespace std;
 
+struct Vec2
+{
+    float x;
+    float y;
+
+    Vec2 operator-(const Vec2& Other) const;
+    float Length() const;
+    float Length2() const;
+    float GetAngle(const Vec2& Other) const;
+};
+
+struct Pod 
+{
+    Vec2 Position;
+    Vec2 Velocity;
+    float Angle;
+
+    void Rotate(const Vec2& Pos);
+    void Boost(const int thrust);
+    void Move();
+    void End();
+
+    float DiffAngle(const Vec2& Pos) const;
+
+};
 
 
 /**
@@ -17,6 +43,10 @@ int main()
 
     // game loop
     while (1) {
+
+        // the idea is to simulate some turn in advance with the cost of each action.
+        // Lets first do that for only our pod.
+
         int x;
         int y;
         int nextCheckpointX; // x position of the next check point
@@ -54,4 +84,41 @@ int main()
             cout << nextCheckpointX << " " << nextCheckpointY << " " << thrust << endl;
         }
     }
+}
+
+/// Vec 2 ===================================================
+float Vec2::Length2() const
+{
+    return x*x+y*y;
+}
+
+float Vec2::Length() const
+{
+    return sqrt(this->Length2());
+}
+
+/// Pod ======================================================
+void Pod::Rotate(const Vec2 &Pos)
+{
+
+}
+
+void Pod::Boost(const int thrust)
+{
+
+}
+
+void Pod::Move()
+{
+
+}
+
+void Pod::End()
+{
+
+}
+
+float Pod::DiffAngle(const Vec2 &Pos) const
+{
+    return 0.f;
 }
