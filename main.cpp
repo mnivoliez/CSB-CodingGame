@@ -8,6 +8,9 @@
 using namespace std;
 
 #define MAX_DEPTH 4
+#define MAX_ANGLE 5
+#define MAX_THRUST 100
+#define K 4
 #define PI 3.14f
 
 // Step:
@@ -15,11 +18,11 @@ using namespace std;
 //  * Compute MAX_DEPTH next turn
 //      * Each turn will be represented by a Move and a resulting state
 //      * Each turn will have a parent turn
-//      * Each turn will have a score compute from the distance separating the pod from the next checkpoint
+//      * Each turn will have a score compute from the distance separating the
+//      pod from the next checkpoint
 //  * We keep the best sequence of move based on the score
 //  * We applied the first move of the sequence
 //  * Rince and repeat.
-
 
 struct FVec2 {
   FVec2() : X(0.f), Y(0.f){};
@@ -28,17 +31,27 @@ struct FVec2 {
   float Y;
 
   FVec2 operator-(const FVec2 &Other) const;
+  FVec2 operator+(const FVec2 &Other) const;
+  FVec2 operator*(const float Value) const;
   float Length() const;
   float Length2() const;
   float Dot(const FVec2 &Other) const;
   float GetAngle(const FVec2 &Other) const;
+  FVec2 Normalise() const;
 
-  friend ostream& operator<<(ostream& os, const FVec2& Vec)
-  {
+  friend ostream &operator<<(ostream &os, const FVec2 &Vec) {
     os << Vec.X << " " << Vec.Y;
     return os;
   }
 };
+
+FVec2 Lerp(const FVec2 &A, const FVec2 &B, float Delta) {
+  cerr << "A: " << A << "\nB: " << B << "\nA * Delta: " << A * Delta
+       << "\nB * (1-Delta): " << B * (1 - Delta)
+       << "\nA * Delta + B * (1-Delta): " << A * Delta + B * (1 - Delta)
+       << endl;
+  return A * Delta + B * (1 - Delta);
+}
 
 struct FGameObject {
   FGameObject() : Radius(0.0f){};
@@ -47,10 +60,9 @@ struct FGameObject {
   float Radius;
   string ID;
 
-  friend ostream& operator<<(ostream& os, const FGameObject& GameObject)
-  {
+  friend ostream &operator<<(ostream &os, const FGameObject &GameObject) {
     os << GameObject.ID << endl
-        << "\tPosition: " << GameObject.Position << endl;
+       << "\tPosition: " << GameObject.Position << endl;
     return os;
   }
 };
@@ -61,12 +73,10 @@ struct FMove {
   float Angle;
   float Thrust;
 
-  friend ostream& operator<<(ostream& os, const FMove& Move)
-  {
-    os << "Move:\n" 
-        << "\tUse shield: " << (Move.bUseShield ? "Yes" : "No") << endl
-        << "\tAngle: " << Move.Angle
-        << "\tThrust: " << Move.Thrust << endl;
+  friend ostream &operator<<(ostream &os, const FMove &Move) {
+    os << "Move:\n"
+       << "\tUse shield: " << (Move.bUseShield ? "Yes" : "No") << endl
+       << "\tAngle: " << Move.Angle << "\tThrust: " << Move.Thrust << endl;
     return os;
   }
 };
@@ -98,10 +108,8 @@ struct FPod : public FGameObject {
 
   void ApplyMove(const FMove &Move);
 
-  friend ostream& operator<<(ostream& os, const FPod& Pod)
-  {
-    os << (FGameObject)Pod 
-        << "\tVelocity: "<< Pod.Velocity << endl;
+  friend ostream &operator<<(ostream &os, const FPod &Pod) {
+    os << (FGameObject)Pod << "\tVelocity: " << Pod.Velocity << endl;
     return os;
   }
 };
@@ -111,41 +119,63 @@ struct FCheckPoint : public FGameObject {
     ID = "CheckPoint";
     Radius = 600.f;
   }
+  FCheckPoint(const string &Id, const FVec2 &Pos, const int Ord) : Order(Ord) {
+    ID = Id;
+    Position = Pos;
+    Radius = 600.f;
+  }
+
+  int Order;
 };
 
-// The idea is to predict the best course of action for our pod.
-// To do that, just like in chess we can try to predict the next moves
-// We can imagine the chain of move as a tree.
-// For each branch of the tree we can either thrust, boost or shield.
-// After predicting a certain number of move we can use a scoring function to
-// select our best course of action.
-struct FNode {
-  FNode(FPod &Instance) : PodInstance(Instance){};
+class FCheckpointsManager {
+public:
+  FCheckpointsManager()
+      : Laps(0), LastCheckpointPass(""), AimedCheckpoint(""),
+        BestCandidateForBoost(""){};
 
-  FPod PodInstance;
-  FMove Move;
+public:
+  void UpdateCheckpoint(const FVec2 &Pos);
 
-  FNode *Parent;
+  bool IsNextCheckpointBestCandidateForBoost(const FVec2 &Pos) const;
+
+  bool PassFirstLaps() const { return Laps >= 1; }
+
+  FVec2 GetNextCheckpoint(const FVec2 &Pos) const;
+
+private:
+  string GetCheckpointUniqueID(const FVec2 &Pos) const;
+  void ComputeBestCandidateForBoost();
+
+private:
+  int Laps;
+  map<string, FCheckPoint> Checkpoints;
+  vector<string> ChecpointOrder;
+  string LastCheckpointPass;
+  string AimedCheckpoint;
+  string BestCandidateForBoost;
 };
 
-struct FSimulation {
-  // As given at the begining of the turn
-  FPod *PlayerPod;
-  FPod *EnemyPod;
-  FCheckPoint NextCheckpoint;
-  float CalculationTimeLeft;
+class ISolution {
+public:
+  virtual void Update(const FVec2 &PlayerPos, const FVec2 &EnemyPos,
+                      const FVec2 &CPPos, const float CPAngle,
+                      const float CPDist) = 0;
+  virtual FMove Solve() = 0;
+};
 
-  // We need to store each generation for each pod
-  vector<FNode> CurrentGeneration;
-  vector<FNode> PastGenerations;
-  vector<FNode> SuccessfulGenerations;
+class FBasicSolution : public ISolution {
+public:
+  virtual void Update(const FVec2 &PlayerPos, const FVec2 &EnemyPos,
+                      const FVec2 &CPPos, const float CPAngle,
+                      const float CPDist) override;
+  virtual FMove Solve() override;
 
-  // Get original info into the simulation
-  void Reset(FPod &Player, FPod &Enemy, FCheckPoint &CheckPoint);
-  // Simulate the next X turn, X between 1 to MAX_DEPTH
-  void Simulate();
-
-  void SimulateTurn();
+private:
+  FVec2 PlayerPos;
+  FVec2 CPPos;
+  float CPAngle;
+  float CPDist;
 };
 
 /**
@@ -154,60 +184,48 @@ struct FSimulation {
  **/
 int main() {
   bool used_boost = false;
-  FSimulation Sim;
   FPod Player("PLAYER");
   FPod Opponent("Enemy");
+
+  FCheckpointsManager CPManager;
+  FBasicSolution BasicSol;
 
   // game loop
   while (1) {
 
     // the idea is to simulate some turn in advance with the cost of each
     // action. Lets first do that for only our pod.
-    FCheckPoint NextCheckpoint;
-
+    FVec2 CPPos;
+    FVec2 PlayerPos;
+    FVec2 EnemyPos;
     int nextCheckpointDist;  // distance to the next checkpoint
     int nextCheckpointAngle; // angle between your pod orientation and the
                              // direction of the next checkpoint
-    cin >> Player.Position.X >> Player.Position.Y 
-        >> NextCheckpoint.Position.X >> NextCheckpoint.Position.Y 
-        >> nextCheckpointDist >> nextCheckpointAngle;
+    cin >> PlayerPos.X >> PlayerPos.Y >> CPPos.X >> CPPos.Y >>
+        nextCheckpointDist >> nextCheckpointAngle;
     cin.ignore();
 
-    FVec2 FromPlayerToCheckpoint = NextCheckpoint.Position - Player.Position;
-    float dist = FromPlayerToCheckpoint.Length();
     
-    cin >> Opponent.Position.X >> Opponent.Position.Y;
+    cin >> EnemyPos.X >> EnemyPos.Y;
+
     cin.ignore();
-    
+
     // Write an action using cout. DON'T FORGET THE "<< endl"
     // To debug: cerr << "Debug messages..." << endl;
-    cerr << Opponent << endl;
-    cerr << Player << endl;
-    cerr << NextCheckpoint << endl;
-   
-    int thrust;
+    CPManager.UpdateCheckpoint(CPPos);
+    BasicSol.Update(PlayerPos, EnemyPos, CPPos, nextCheckpointAngle, nextCheckpointDist);
+    FMove Move = BasicSol.Solve();
+    cout << CPPos << " " << Move.Thrust << endl;
+    
 
-    if (nextCheckpointAngle > 90 || nextCheckpointAngle < -90) {
-      thrust = 0;
-    } else if (nextCheckpointAngle != 0 && nextCheckpointDist == 1000) {
-      thrust = 0;
-    } else if (nextCheckpointDist < 100) {
-      thrust = 50;
-    } else if (nextCheckpointDist < 50) {
-      thrust = 0;
-    } else {
-      thrust = 100;
-    }
-    // You have to output the target position
-    // followed by the power (0 <= thrust <= 100)
-    // i.e.: "x y thrust"
-    if (!used_boost && nextCheckpointDist > 7000 && nextCheckpointAngle == 0) {
-      cout << NextCheckpoint.Position << " BOOST" << endl;
-      used_boost = true;
-    } else {
-      cout << NextCheckpoint.Position << " " << thrust
-           << endl;
-    }
+    /*bool shouldUseBoost =
+        !used_boost && CPManager.PassFirstLaps() && nextCheckpointDist > 7000 &&
+        nextCheckpointAngle < MAX_ANGLE && nextCheckpointAngle > -MAX_ANGLE &&
+        CPManager.IsNextCheckpointBestCandidateForBoost(CPPos);
+    if (shouldUseBoost) {
+        cout << Dir << " BOOST" << endl;
+        used_boost = true;
+    }*/
   }
 }
 
@@ -220,6 +238,21 @@ FVec2 FVec2::operator-(const FVec2 &Other) const {
   return Result;
 }
 
+FVec2 FVec2::operator+(const FVec2 &Other) const {
+  FVec2 Result;
+  Result.X = X + Other.X;
+  Result.Y = Y + Other.Y;
+
+  return Result;
+}
+
+FVec2 FVec2::operator*(const float Value) const {
+  FVec2 Result;
+  Result.X = X * Value;
+  Result.Y = Y * Value;
+  return Result;
+}
+
 float FVec2::Length2() const { return X * X + Y * Y; }
 
 float FVec2::Length() const { return sqrt(this->Length2()); }
@@ -229,12 +262,98 @@ float FVec2::Dot(const FVec2 &Other) const { return X * Other.X + Y * Other.Y; }
 float FVec2::GetAngle(const FVec2 &Other) const {
   float dot = this->Dot(Other);
 
-  // result in rad
-  float a = acos(dot / (Length() * Other.Length()));
+  float v1L = Length();
+  float v2L = Other.Length2();
+  float l = v1L * v2L;
+  float dotOnLength = dot / l;
 
+  // result in rad
+  float a = acos(dotOnLength);
   // convert it to deg
-  return a * 180 / PI;
+  float adeg = a * 180 / PI;
+
+  return adeg;
 }
+
+FVec2 FVec2::Normalise() const {
+  FVec2 Norm;
+  float l = Length();
+  cerr << *this << endl << l << endl;
+
+  Norm.X = X / l;
+  Norm.Y = Y / l;
+  cerr << Norm << endl;
+  return Norm;
+}
+
+/// CheckPointManager ========================================
+void FCheckpointsManager::UpdateCheckpoint(const FVec2 &Pos) {
+  string Id = GetCheckpointUniqueID(Pos);
+
+  auto CP = Checkpoints.find(Id);
+  if (CP == Checkpoints.end()) {
+    Checkpoints.emplace(Id, FCheckPoint(Id, Pos, Checkpoints.size()));
+    ChecpointOrder.push_back(Id);
+  } else if (Id != AimedCheckpoint && CP->second.Order == 0) {
+    ++Laps;
+    if (BestCandidateForBoost == "") {
+      ComputeBestCandidateForBoost();
+    }
+  }
+
+  if (AimedCheckpoint.compare(Id) != 0) {
+    LastCheckpointPass = AimedCheckpoint;
+    AimedCheckpoint = Id;
+  }
+}
+
+bool FCheckpointsManager::IsNextCheckpointBestCandidateForBoost(
+    const FVec2 &Pos) const {
+  return GetCheckpointUniqueID(Pos) == BestCandidateForBoost;
+}
+
+FVec2 FCheckpointsManager::GetNextCheckpoint(const FVec2 &Pos) const {
+  string Id = GetCheckpointUniqueID(Pos);
+  string NextId = "";
+  for (int i = 0; i < ChecpointOrder.size(); ++i) {
+    int j = i + 1;
+    if (j == ChecpointOrder.size())
+      j = 0;
+
+    NextId = ChecpointOrder[j];
+  }
+
+  auto CP = Checkpoints.find(NextId);
+  if (CP != Checkpoints.end()) {
+    return CP->second.Position;
+  }
+  return FVec2();
+}
+
+string FCheckpointsManager::GetCheckpointUniqueID(const FVec2 &Pos) const {
+  return to_string((int)Pos.X) + " " + to_string((int)Pos.Y);
+}
+
+void FCheckpointsManager::ComputeBestCandidateForBoost() {
+  float GrtDist2 = 0.f;
+  for (int i = 0; i < ChecpointOrder.size(); ++i) {
+    int j = i + 1;
+    if (j == ChecpointOrder.size()) {
+      j = 0;
+    }
+
+    string Id1 = ChecpointOrder[i];
+    string Id2 = ChecpointOrder[j];
+
+    float dist2 =
+        (Checkpoints[Id2].Position - Checkpoints[Id1].Position).Length2();
+    if (dist2 >= GrtDist2) {
+      GrtDist2 = dist2;
+      BestCandidateForBoost = Id2;
+    }
+  }
+}
+
 /// Pod ======================================================
 void FPod::Rotate(const FVec2 &Pos) {
   float a = DiffAngle(Pos);
@@ -264,10 +383,7 @@ void FPod::Move() {
 
 void FPod::End() {}
 
-void ApplyMove(const FMove& Move)
-{
-
-}
+void ApplyMove(const FMove &Move) {}
 
 float FPod::DiffAngle(const FVec2 &Pos) const {
   float a = Position.GetAngle(Pos);
@@ -283,24 +399,31 @@ float FPod::DiffAngle(const FVec2 &Pos) const {
   }
 }
 
-/// Node =====================================================
+void FBasicSolution::Update(const FVec2 &InPlayerPos, const FVec2 &InEnemyPos,
+                            const FVec2 &InCPPos, const float InCPAngle,
+                            const float InCPDist){
+    PlayerPos = InPlayerPos;
+    CPPos = InCPPos;
+    CPDist = InCPDist;
+    CPAngle = InCPAngle;
 
-/// Simulation ===============================================
-void FSimulation::Reset(FPod &Player, FPod &Enemy, FCheckPoint &Checkpoint) {
-  CalculationTimeLeft = 75.f;
-  PlayerPod = &Player;
-  EnemyPod = &Enemy;
-  NextCheckpoint = Checkpoint;
-}
+};
+FMove FBasicSolution::Solve() {
 
-void FSimulation::Simulate() { SimulateTurn(); }
+  int thrust = 0;
+  if (CPAngle > 90 || CPAngle < -90) {
+    thrust = 0;
+  } else {
+    float angleCoef = clamp(1 - CPAngle / 180.f, 0.f, 1.f);
+    float d = 1;
+    if (CPDist < 600.f * K) {
+      d = CPDist / (600.f * K);
+    }
+    float distCoef = clamp(d, 0.f, 1.f);
+    thrust = MAX_THRUST * angleCoef * distCoef;
+  }
 
-void FSimulation::SimulateTurn() {
-  FMove NextMove;
-  FPod EnemyFutureState(*EnemyPod);
-  EnemyFutureState.Rotate(NextCheckpoint.Position);
-  EnemyFutureState.Boost(100.0f);
-  EnemyFutureState.Move();
-  cerr << "Future Enemy pos: " << EnemyFutureState.Position.X << " "
-       << EnemyFutureState.Position.Y << endl;
+  FMove Move;
+  Move.Thrust = thrust;
+  return Move;
 }
