@@ -64,6 +64,7 @@ struct FVec2 {
   float Length2() const;
   float Dot(const FVec2 &Other) const;
   FAngle GetAngle(const FVec2 &Other) const;
+  FAngle GetAngle() const;
   FVec2 Rotate(const FAngle Angle) const;
   FVec2 Normalise() const;
 
@@ -135,20 +136,25 @@ public:
                       const float CPDist) override;
   virtual FMove Solve() override;
 
-  FMapSolver(GameMap *GMap) : BoostUsed(false), Map(GMap){};
+  FMapSolver(GameMap *GMap) : bBoostUsed(false), Map(GMap){};
 
 private:
-  FMove Explore() const;
+  FMove Explore();
   FMove ComputeMoveFromMap();
+
+  bool ShouldUseShield() const;
+  bool ShouldUseBoost() const;
 
 protected:
   GameMap *Map;
   FVec2 PlayerPos;
+  FVec2 PrevPlayerPos;
   FVec2 EnemyPos;
+  FVec2 PrevEnemyPos;
   FVec2 CPPos;
   float CPAngle;
   float CPDist;
-  bool BoostUsed;
+  bool bBoostUsed;
 };
 
 /// Vec 2 ===================================================
@@ -191,9 +197,10 @@ FAngle FVec2::GetAngle(const FVec2 &Other) const {
 
   // result in rad
   float a = acos(dotOnLength);
-
   return FAngle::FromRad(a);
 }
+
+FAngle FVec2::GetAngle() const { return FAngle::FromRad(atan2(Y, X)); }
 
 FVec2 FVec2::Rotate(const FAngle Angle) const {
   FVec2 Result;
@@ -207,15 +214,12 @@ FVec2 FVec2::Rotate(const FAngle Angle) const {
 FVec2 FVec2::Normalise() const {
   FVec2 Norm;
   float l = Length();
-  cerr << *this << endl << l << endl;
-
   Norm.X = X / l;
   Norm.Y = Y / l;
-  cerr << Norm << endl;
   return Norm;
 }
 
-/// CheckPointManager ========================================
+/// GameMap ==============================================
 void GameMap::UpdateCheckpoint(const FVec2 &Pos) {
   int index = FindCheckpointIndex(Pos);
 
@@ -277,7 +281,9 @@ void GameMap::ComputeBestCandidateForBoost() {
 void FMapSolver::Update(const FVec2 &InPlayerPos, const FVec2 &InEnemyPos,
                         const FVec2 &InCPPos, const float InCPAngle,
                         const float InCPDist) {
+  PrevPlayerPos = PlayerPos;
   PlayerPos = InPlayerPos;
+  PrevEnemyPos = EnemyPos;
   EnemyPos = InEnemyPos;
   CPPos = InCPPos;
   CPDist = InCPDist;
@@ -287,40 +293,87 @@ void FMapSolver::Update(const FVec2 &InPlayerPos, const FVec2 &InEnemyPos,
 };
 
 FMove FMapSolver::Solve() {
-  if (Map->PassFirstLaps()) {
+  /**if (Map->PassFirstLaps()) {
     return ComputeMoveFromMap();
-  }
+  }*/
   return Explore();
 }
 
-FMove FMapSolver::Explore() const {
+FMove FMapSolver::Explore() {
   FMove Move;
-  int thrust = 0;
-  if (abs(CPAngle) > 90) {
-    thrust = 0;
+
+  Move.bUseShield = ShouldUseShield();
+
+  if (abs(CPAngle) >= 18.f) {
+    FVec2 DesiredDirection = (CPPos - PlayerPos).Normalise();
+    FVec2 CurrentDir =
+        DesiredDirection.Rotate(FAngle::FromDeg(-CPAngle)).Normalise();
+    FAngle SteeringAngle = FAngle::FromDeg(clamp(CPAngle, -18.f, 18.f));
+    FVec2 TargetDirection = CurrentDir.Rotate(SteeringAngle).Normalise();
+    Move.Target = PlayerPos + TargetDirection * 100;
   } else {
-    float angleCoef = 0;
-    angleCoef = FAngle::FromDeg(CPAngle).Cos();
-    float d = CPDist / 600.0f * K;
-    float distCoef = clamp(d, 0.f, 1.f);
-    thrust = MAX_THRUST * angleCoef * distCoef;
+    Move.Target = CPPos;
+  }
+  if (ShouldUseBoost()) {
+    Move.bUseBoost = true;
+    bBoostUsed = true;
+  }
+
+  int thrust = 100;
+
+  if (abs(CPAngle) >= 90.f) {
+    thrust = 0;
+  } else if (CPDist < 600.f * 6) {
+    float AngleCoef = 1 - abs(CPAngle) / 90.f;
+    thrust *= AngleCoef;
   }
 
   Move.Thrust = thrust;
-  Move.Target = CPPos;
+
   cerr << Move << endl;
   return Move;
 }
-FMove FMapSolver::ComputeMoveFromMap() { 
-    
-    FMove Result;
+FMove FMapSolver::ComputeMoveFromMap() {
 
-    Result.Target = CPPos;
-    Result.Thrust = 100.f;
-    return Result; 
-    
+  FMove Result;
+
+  Result.Target = CPPos;
+  Result.Thrust = 100.f;
+  return Result;
 }
 
+bool FMapSolver::ShouldUseShield() const {
+  if (PrevEnemyPos != FVec2()) {
+    FVec2 EnemyVel = EnemyPos - PrevEnemyPos;
+    FVec2 FutureEnemyPos = EnemyPos + EnemyVel * 0.85f;
+
+    FVec2 PlayerVel = PlayerPos - PrevPlayerPos;
+    FVec2 FuturePlayerPos = PlayerPos + PlayerVel * 0.85;
+
+    const float kPodCollBox = 400.0f * 2; // We seek coll between bbox
+    FVec2 PlayerToEnemy = FutureEnemyPos - FuturePlayerPos;
+    float Dist2PtoE = PlayerToEnemy.Length2();
+
+    return Dist2PtoE <= (kPodCollBox * kPodCollBox);
+  }
+  return false;
+}
+bool FMapSolver::ShouldUseBoost() const {
+  return !bBoostUsed && Map->PassFirstLaps() && CPDist > 7000 &&
+         abs(CPAngle) < MAX_ANGLE &&
+         Map->IsNextCheckpointBestCandidateForBoost(CPPos);
+}
+
+void PrintMove(const FMove &Move) {
+  cout << (int)Move.Target.X << " " << (int)Move.Target.Y << " ";
+  if (Move.bUseBoost) {
+    cout << "BOOST" << endl;
+  } else if (Move.bUseShield) {
+    cout << "SHIELD" << endl;
+  } else {
+    cout << Move.Thrust << endl;
+  }
+}
 /**
  * Auto-generated code below aims at helping you parse
  * the standard input according to the problem statement.
@@ -342,7 +395,6 @@ int main() {
     cin >> PlayerPos.X >> PlayerPos.Y >> CPPos.X >> CPPos.Y >>
         nextCheckpointDist >> nextCheckpointAngle;
     cin.ignore();
-
     cin >> EnemyPos.X >> EnemyPos.Y;
 
     cin.ignore();
@@ -352,20 +404,9 @@ int main() {
 
     MapSolver.Update(PlayerPos, EnemyPos, CPPos, nextCheckpointAngle,
                      nextCheckpointDist);
-    FMove Move = MapSolver.Solve();
-    if (Move.bUseBoost) {
-      cout << (int)Move.Target.X << " " << (int)Move.Target.Y << " BOOST" << endl;
-    } else {
-      cout << (int)Move.Target.X << " " << (int)Move.Target.Y << " " << Move.Thrust << endl;
-    }
 
-    /*bool shouldUseBoost =
-        !used_boost && CPManager.PassFirstLaps() && nextCheckpointDist > 7000 &&
-        nextCheckpointAngle < MAX_ANGLE && nextCheckpointAngle > -MAX_ANGLE &&
-        CPManager.IsNextCheckpointBestCandidateForBoost(CPPos);
-    if (shouldUseBoost) {
-        cout << Dir << " BOOST" << endl;
-        used_boost = true;
-    }*/
+    PrintMove(MapSolver.Solve());
+
+    /**/
   }
 }
