@@ -2,28 +2,15 @@
 #include <cmath>
 #include <iostream>
 #include <map>
+#include <random>
 #include <string>
 #include <vector>
 
 using namespace std;
 
-#define MAX_DEPTH 4
-#define MAX_ANGLE 5
 #define MAX_THRUST 100
-#define K 3
 #define TAU 6.283185307179586232
 #define PI TAU / 2
-
-// Step:
-//  * Populate sim world
-//  * Compute MAX_DEPTH next turn
-//      * Each turn will be represented by a Move and a resulting state
-//      * Each turn will have a parent turn
-//      * Each turn will have a score compute from the distance separating the
-//      pod from the next checkpoint
-//  * We keep the best sequence of move based on the score
-//  * We applied the first move of the sequence
-//  * Rince and repeat.
 
 class FAngle {
 public:
@@ -56,6 +43,7 @@ struct FVec2 {
   FVec2 operator-(const FVec2 &Other) const;
   FVec2 operator+(const FVec2 &Other) const;
   FVec2 operator*(const float Value) const;
+  FVec2 operator/(const float Value) const;
   bool operator==(const FVec2 &Other) const {
     return X == Other.X && Y == Other.Y;
   }
@@ -109,6 +97,8 @@ public:
 
   FVec2 GetNextCheckpoint(const FVec2 &Pos) const;
 
+  vector<FVec2> GetCheckpoints() const { return Checkpoints; }
+
 private:
   int FindCheckpointIndex(const FVec2 &Pos) const;
   void ComputeBestCandidateForBoost();
@@ -129,6 +119,20 @@ public:
   virtual FMove Solve() = 0;
 };
 
+struct FGene {
+  FGene(FVec2 Pt, FAngle Angle, float Dist2, bool Virtual = true)
+      : Point(Pt), AngleToNextPoint(Angle), Dist2ToNextPoint(Dist2),
+        bVirtual(Virtual){};
+
+  FVec2 Point;
+  FAngle AngleToNextPoint;
+  float Dist2ToNextPoint;
+  bool bVirtual;
+};
+typedef vector<FGene> FGenome;
+typedef vector<FGenome> FGeneticPool;
+typedef vector<FGeneticPool> FGeneticGenerations;
+
 class FMapSolver : public ISolver {
 public:
   virtual void Update(const FVec2 &PlayerPos, const FVec2 &EnemyPos,
@@ -136,7 +140,8 @@ public:
                       const float CPDist) override;
   virtual FMove Solve() override;
 
-  FMapSolver(GameMap *GMap) : bBoostUsed(false), Map(GMap){};
+  FMapSolver(GameMap *GMap)
+      : bBoostUsed(false), Map(GMap), bGeneticPoolSeeded(false){};
 
 private:
   FMove Explore();
@@ -144,6 +149,9 @@ private:
 
   bool ShouldUseShield() const;
   bool ShouldUseBoost() const;
+
+  void SeedGeneticMap();
+  void ComputeGeneticMap();
 
 protected:
   GameMap *Map;
@@ -155,6 +163,11 @@ protected:
   float CPAngle;
   float CPDist;
   bool bBoostUsed;
+
+  bool bGeneticPoolSeeded;
+  FGenome GeneticMap;
+  FGenome GeneticSeed;
+  FGeneticGenerations Genenerations;
 };
 
 /// Vec 2 ===================================================
@@ -178,6 +191,12 @@ FVec2 FVec2::operator*(const float Value) const {
   FVec2 Result;
   Result.X = X * Value;
   Result.Y = Y * Value;
+  return Result;
+}
+FVec2 FVec2::operator/(const float Value) const {
+  FVec2 Result;
+  Result.X = X / Value;
+  Result.Y = Y / Value;
   return Result;
 }
 
@@ -293,9 +312,10 @@ void FMapSolver::Update(const FVec2 &InPlayerPos, const FVec2 &InEnemyPos,
 };
 
 FMove FMapSolver::Solve() {
-  /**if (Map->PassFirstLaps()) {
-    return ComputeMoveFromMap();
-  }*/
+  if (Map->PassFirstLaps()) {
+    ComputeGeneticMap();
+  }
+
   return Explore();
 }
 
@@ -304,11 +324,13 @@ FMove FMapSolver::Explore() {
 
   Move.bUseShield = ShouldUseShield();
 
-  if (abs(CPAngle) >= 18.f) {
+  const float kMaxSteeringAngle = 18.f;
+  if (abs(CPAngle) >= kMaxSteeringAngle) {
     FVec2 DesiredDirection = (CPPos - PlayerPos).Normalise();
     FVec2 CurrentDir =
         DesiredDirection.Rotate(FAngle::FromDeg(-CPAngle)).Normalise();
-    FAngle SteeringAngle = FAngle::FromDeg(clamp(CPAngle, -18.f, 18.f));
+    FAngle SteeringAngle =
+        FAngle::FromDeg(clamp(CPAngle, -kMaxSteeringAngle, kMaxSteeringAngle));
     FVec2 TargetDirection = CurrentDir.Rotate(SteeringAngle).Normalise();
     Move.Target = PlayerPos + TargetDirection * 100;
   } else {
@@ -319,16 +341,16 @@ FMove FMapSolver::Explore() {
     bBoostUsed = true;
   }
 
-  int thrust = 100;
-
-  if (abs(CPAngle) >= 90.f) {
-    thrust = 0;
-  } else if (CPDist < 600.f * 6) {
-    float AngleCoef = 1 - abs(CPAngle) / 90.f;
-    thrust *= AngleCoef;
+  const int KMaxThrust = 100;
+  if (abs(CPAngle) < 1) {
+    Move.Thrust = KMaxThrust;
+  } else if (abs(CPAngle) >= 90.f) {
+    Move.Thrust = 0;
+  } else {
+    float DistCoef = 1.0f; // clamp(CPDist / (600.f *4), 0.f, 1.f);
+    float AngleCoef = 1.f - clamp(CPAngle / 90.f, 0.f, 1.f);
+    Move.Thrust = round(KMaxThrust * DistCoef * AngleCoef);
   }
-
-  Move.Thrust = thrust;
 
   cerr << Move << endl;
   return Move;
@@ -336,7 +358,6 @@ FMove FMapSolver::Explore() {
 FMove FMapSolver::ComputeMoveFromMap() {
 
   FMove Result;
-
   Result.Target = CPPos;
   Result.Thrust = 100.f;
   return Result;
@@ -353,15 +374,81 @@ bool FMapSolver::ShouldUseShield() const {
     const float kPodCollBox = 400.0f * 2; // We seek coll between bbox
     FVec2 PlayerToEnemy = FutureEnemyPos - FuturePlayerPos;
     float Dist2PtoE = PlayerToEnemy.Length2();
+    bool bIsInRange = Dist2PtoE <= (kPodCollBox * kPodCollBox);
 
-    return Dist2PtoE <= (kPodCollBox * kPodCollBox);
+    return bIsInRange;
   }
   return false;
 }
 bool FMapSolver::ShouldUseBoost() const {
+  const float kMaxAngle = 2.0f;
   return !bBoostUsed && Map->PassFirstLaps() && CPDist > 7000 &&
-         abs(CPAngle) < MAX_ANGLE &&
+         abs(CPAngle) < kMaxAngle &&
          Map->IsNextCheckpointBestCandidateForBoost(CPPos);
+}
+
+void FMapSolver::SeedGeneticMap() {
+  if (bGeneticPoolSeeded)
+    return;
+  auto &&CPs = Map->GetCheckpoints();
+  for (int i = 0; i < CPs.size(); ++i) {
+    int j = i + 1;
+    if (j >= CPs.size())
+      j = 0;
+    int k = i - 1;
+    if (k < 0)
+      k = CPs.size() - 1;
+    FVec2 PrevSeg = CPs[i] - CPs[k];
+    FVec2 NextSeg = CPs[j] - CPs[i];
+    GeneticSeed.emplace_back(FGene(CPs[i], PrevSeg.GetAngle(NextSeg),
+                                   (CPs[j] - CPs[i]).Length2(), false));
+  }
+  // Generate 6 candidates from the seed
+  const int kCandidates = 6;
+  for (int cidx = 0; cidx < kCandidates; ++cidx) {
+    FGenome Candidate;
+    for (int i = 0; i < GeneticSeed.size(); ++i) {
+      Candidate.emplace_back(GeneticSeed[i]);
+      if (GeneticSeed[i].Dist2ToNextPoint < 800.f * 800.f)
+        continue;
+      int j = i + 1;
+      if (j >= CPs.size())
+        j = 0;
+
+      int k = j + 1;
+      if (k >= GeneticSeed.size())
+        k = 0;
+
+      FVec2 CurrSeg = GeneticSeed[j].Point - GeneticSeed[i].Point;
+      FVec2 NextSeg = GeneticSeed[k].Point - GeneticSeed[j].Point;
+
+      // cut segment in two
+      FVec2 NewSeg = CurrSeg / 2.0f;
+      // rotate new segment between [-18;18]
+      int A = 0;
+      while (A == 0)
+        A = (rand() % 36) - 18;
+      FAngle Angle = FAngle::FromDeg(A);
+
+      NewSeg.Rotate(Angle);
+      FVec2 NewPoint = GeneticSeed[i].Point + NewSeg;
+      FVec2 NNewSeg = GeneticSeed[j].Point - NewPoint;
+
+      Candidate.emplace_back(
+          FGene(NewPoint, NNewSeg.GetAngle(NextSeg), NNewSeg.Length2()));
+      Candidate[i].AngleToNextPoint = Angle;
+    }
+    //Pool.emplace_back(Candidate);
+  }
+  bGeneticPoolSeeded = true;
+}
+
+void FMapSolver::ComputeGeneticMap() {
+
+  cerr << "Compute genetic map\n";
+  SeedGeneticMap();
+  // Mutate Genetic poool;
+  
 }
 
 void PrintMove(const FMove &Move) {
@@ -382,10 +469,9 @@ int main() {
   GameMap GMap;
   FMapSolver MapSolver(&GMap);
   // game loop
+
   while (1) {
 
-    // the idea is to simulate some turn in advance with the cost of each
-    // action. Lets first do that for only our pod.
     FVec2 CPPos;
     FVec2 PlayerPos;
     FVec2 EnemyPos;
@@ -398,7 +484,7 @@ int main() {
     cin >> EnemyPos.X >> EnemyPos.Y;
 
     cin.ignore();
-
+   
     // Write an action using cout. DON'T FORGET THE "<< endl"
     // To debug: cerr << "Debug messages..." << endl;
 
@@ -406,7 +492,5 @@ int main() {
                      nextCheckpointDist);
 
     PrintMove(MapSolver.Solve());
-
-    /**/
   }
 }
