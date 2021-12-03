@@ -40,6 +40,12 @@ public:
   float Sin() const { return sin(Value); }
   float Tan() const { return tan(Value); }
 
+  FAngle operator*(const float Val) const {
+    FAngle Res;
+    Res.Value = Value * Val;
+    return Res;
+  }
+
 private:
   FAngle(float Val) : Value(Val){};
 
@@ -144,6 +150,11 @@ private:
 
   bool ShouldUseShield() const;
   bool ShouldUseBoost() const;
+  FVec2 ComputeTarget() const;
+  FVec2 ComputeTargetFromMap() const;
+  float ComputeThrust(float Angle, float Dist) const;
+
+  FVec2 GetPlayerForward() const;
 
 protected:
   GameMap *Map;
@@ -293,9 +304,9 @@ void FMapSolver::Update(const FVec2 &InPlayerPos, const FVec2 &InEnemyPos,
 };
 
 FMove FMapSolver::Solve() {
-  /**if (Map->PassFirstLaps()) {
+  if (Map->PassFirstLaps()) {
     return ComputeMoveFromMap();
-  }*/
+  }
   return Explore();
 }
 
@@ -304,31 +315,9 @@ FMove FMapSolver::Explore() {
 
   Move.bUseShield = ShouldUseShield();
 
-  if (abs(CPAngle) >= 18.f) {
-    FVec2 DesiredDirection = (CPPos - PlayerPos).Normalise();
-    FVec2 CurrentDir =
-        DesiredDirection.Rotate(FAngle::FromDeg(-CPAngle)).Normalise();
-    FAngle SteeringAngle = FAngle::FromDeg(clamp(CPAngle, -18.f, 18.f));
-    FVec2 TargetDirection = CurrentDir.Rotate(SteeringAngle).Normalise();
-    Move.Target = PlayerPos + TargetDirection * 100;
-  } else {
-    Move.Target = CPPos;
-  }
-  if (ShouldUseBoost()) {
-    Move.bUseBoost = true;
-    bBoostUsed = true;
-  }
+  Move.Target = ComputeTarget();
 
-  int thrust = 100;
-
-  if (abs(CPAngle) >= 90.f) {
-    thrust = 0;
-  } else if (CPDist < 600.f * 6) {
-    float AngleCoef = 1 - abs(CPAngle) / 90.f;
-    thrust *= AngleCoef;
-  }
-
-  Move.Thrust = thrust;
+  Move.Thrust = ComputeThrust(CPAngle, CPDist);
 
   cerr << Move << endl;
   return Move;
@@ -336,9 +325,17 @@ FMove FMapSolver::Explore() {
 FMove FMapSolver::ComputeMoveFromMap() {
 
   FMove Result;
+  Result.bUseShield = ShouldUseShield();
+  Result.bUseBoost = ShouldUseBoost();
+  Result.Target = ComputeTargetFromMap();
+  if (ShouldUseBoost()) {
+    Result.bUseBoost = true;
+    bBoostUsed = true;
+  }
 
-  Result.Target = CPPos;
-  Result.Thrust = 100.f;
+  FVec2 PlayerForward = GetPlayerForward();
+  FVec2 PtoTarget = Result.Target - PlayerPos;
+  Result.Thrust = ComputeThrust(PlayerForward.GetAngle(PtoTarget.Normalise()).ToDeg(), CPDist);
   return Result;
 }
 
@@ -362,6 +359,78 @@ bool FMapSolver::ShouldUseBoost() const {
   return !bBoostUsed && Map->PassFirstLaps() && CPDist > 7000 &&
          abs(CPAngle) < MAX_ANGLE &&
          Map->IsNextCheckpointBestCandidateForBoost(CPPos);
+}
+
+FVec2 FMapSolver::ComputeTarget() const {
+  FVec2 CurrentDir = GetPlayerForward();
+  FVec2 Target;
+
+  FVec2 Offset;
+  FVec2 Inertie = (PlayerPos - PrevPlayerPos);
+  FAngle InertieRot = CurrentDir.GetAngle(Inertie.Normalise());
+  if (abs(InertieRot.ToDeg()) > 0) {
+    Offset = Inertie.Rotate(InertieRot * -2);
+  }
+  if (abs(CPAngle) >= 18.f) {
+    FAngle SteeringAngle = FAngle::FromDeg(clamp(CPAngle, -18.f, 18.f));
+    FVec2 TargetDirection = CurrentDir.Rotate(SteeringAngle).Normalise();
+    Target = PlayerPos + TargetDirection * 10000; // + Offset;
+  } else {
+    Target = CPPos; // + Offset;
+  }
+
+  return Target;
+}
+FVec2 FMapSolver::ComputeTargetFromMap() const {
+  if (CPDist > 5000.f || abs(CPAngle) > 18.f)
+    return ComputeTarget();
+
+  FVec2 Target;
+  const float kAngleOffset = 10.f;
+  FVec2 PlayerForward = GetPlayerForward();
+  FVec2 PtoNCPDir = (Map->GetNextCheckpoint(CPPos) - PlayerPos).Normalise();
+  FAngle PtoNCPAngle = PlayerForward.GetAngle(PtoNCPDir);
+
+  FVec2 Offset;
+  FVec2 Inertie = PlayerPos - PrevPlayerPos;
+  FAngle InertieRot = PlayerForward.GetAngle(Inertie.Normalise());
+  if (abs(InertieRot.ToDeg()) > 0) {
+    Offset = Inertie.Rotate(InertieRot * -2);
+  }
+
+  if (PtoNCPAngle.ToDeg() - CPAngle < 2.0f) {
+    Target = Map->GetNextCheckpoint(CPPos) + Offset * 1000;
+  } else if (PtoNCPAngle.ToDeg() > CPAngle) {
+    FAngle SteeringAngle =
+        FAngle::FromDeg(clamp(CPAngle - kAngleOffset, -18.f, 18.f));
+    FVec2 TargetDirection = PlayerForward.Rotate(SteeringAngle).Normalise();
+    Target = PlayerPos + TargetDirection * 10000; // + Offset;
+  } else {
+    FAngle SteeringAngle =
+        FAngle::FromDeg(clamp(CPAngle + kAngleOffset, -18.f, 18.f));
+    FVec2 TargetDirection = PlayerForward.Rotate(SteeringAngle).Normalise();
+    Target = PlayerPos + TargetDirection * 10000; // + Offset;
+  }
+
+  return Target;
+}
+
+float FMapSolver::ComputeThrust(float Angle, float Dist) const {
+
+  int thrust = 100;
+
+  if (abs(Angle) >= 90.f) {
+    thrust = 0;
+  } else if (Dist < 600.f * 6) {
+    float AngleCoef = 1 - abs(Angle) / 90.f;
+    thrust *= AngleCoef;
+  }
+  return thrust;
+}
+
+FVec2 FMapSolver::GetPlayerForward() const {
+  FVec2 DesiredDirection = (CPPos - PlayerPos).Normalise();
+  return DesiredDirection.Rotate(FAngle::FromDeg(-CPAngle)).Normalise();
 }
 
 void PrintMove(const FMove &Move) {
