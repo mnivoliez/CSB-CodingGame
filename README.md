@@ -31,6 +31,7 @@ Trying to tune speed and angle according to the n and n+1 checkpoints : 2h
 ### Genetic map
 
 I tried to determine an optimal course after the first lap using an genetic algorythm, without success : 3h
+It is visible in the genetic-map branch of the repo: https://github.com/mnivoliez/CSB-CodingGame/tree/genetic-map
 
 ### Other
 Trying to counter inertia: 1h
