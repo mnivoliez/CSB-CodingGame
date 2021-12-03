@@ -1,6 +1,6 @@
 # CSB-CodingGame
 
-Code for the Coder Strike Back on cding game.
+Code for the Coder Strike Back on coding game.
 
 ## Codingame
 https://www.codingame.com/profile/be513aec591129dc3c40c9762bf58bc8809969
@@ -30,7 +30,7 @@ Trying to tune speed and angle according to the n and n+1 checkpoints : 2h
 
 ### Genetic map
 
-I tried to determine an optimal course after the first lap using an genetic algorythm, without success : 3h
+I tried to determine an optimal course after the first lap using an genetic algorithm, without success : 3h
 It is visible in the genetic-map branch of the repo: https://github.com/mnivoliez/CSB-CodingGame/tree/genetic-map
 
 ### Other
@@ -45,6 +45,6 @@ We use boost after first turn on the longest segment.
 ## Difficulties
 
 As I do not know how the speed is calculated from the thrust, I do not know how to determine my next position.
-I tried using a genetic algorythm as it is suggested by the challenge presentation page. I have never done that before and as it seems like the right call, it is difficult to learn to do it quickly.
+I tried using a genetic algorithm as it is suggested by the challenge presentation page. I have never done that before and as it seems like the right call, it is difficult to learn to do it quickly.
 
 15 hours is really short.
